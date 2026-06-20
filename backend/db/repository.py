@@ -6,6 +6,7 @@ import logging
 from typing import Optional
 
 from sqlalchemy import desc, func, or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from db.models import Invoice, LineItem, TaxEntry, ProcessingLog
@@ -38,18 +39,8 @@ class InvoiceRepository:
         Persist a fully extracted invoice with its line items and taxes.
         Returns the created Invoice ORM object.
         """
-        # Determine status
-        status = "processed"
-        if extracted.confidence_score < 0.5:
-            status = "needs_review"
-
-        # Serialize addresses to JSON strings for storage
-        def addr_str(addr) -> Optional[str]:
-            if addr is None:
-                return None
-            if hasattr(addr, "as_string"):
-                return addr.as_string()
-            return str(addr)
+        # Determine status: all newly uploaded invoices must be registered/reviewed
+        status = "needs_review"
 
         invoice = Invoice(
             file_name=doc_result.file_name,
@@ -59,20 +50,11 @@ class InvoiceRepository:
             page_count=doc_result.page_count,
             source_type=doc_result.source_type,
             ocr_confidence=doc_result.ocr_confidence,
-            platform=extracted.platform,
             invoice_number=extracted.invoice_number,
             invoice_date=str(extracted.invoice_date) if extracted.invoice_date else None,
             order_id=extracted.order_id,
-            seller_name=extracted.seller_name,
             seller_gstin=extracted.seller_gstin,
-            seller_address=addr_str(extracted.seller_address),
-            buyer_name=extracted.buyer_name,
-            billing_address=addr_str(extracted.billing_address),
-            shipping_address=addr_str(extracted.shipping_address),
-            subtotal=extracted.subtotal,
             grand_total=extracted.grand_total,
-            currency=extracted.currency,
-            payment_method=extracted.payment_method,
             confidence_score=extracted.confidence_score,
             status=status,
             raw_text=doc_result.raw_text[:50000],  # Cap raw text
@@ -86,8 +68,6 @@ class InvoiceRepository:
             db_item = LineItem(
                 invoice_id=invoice.id,
                 name=item.name,
-                description=item.description,
-                sku=item.sku,
                 hsn_code=item.hsn_code,
                 quantity=item.quantity,
                 unit_price=item.unit_price,
@@ -104,7 +84,6 @@ class InvoiceRepository:
                 ("CGST", tb.cgst_rate, tb.cgst_amount),
                 ("SGST", tb.sgst_rate, tb.sgst_amount),
                 ("IGST", tb.igst_rate, tb.igst_amount),
-                ("CESS", None, tb.cess_amount),
             ]
             for tax_type, rate, amount in tax_pairs:
                 if amount is not None:
@@ -115,10 +94,20 @@ class InvoiceRepository:
                         amount=amount,
                     ))
 
-        self.db.commit()
-        self.db.refresh(invoice)
-        logger.info(f"Saved invoice id={invoice.id} ({invoice.file_name})")
-        return invoice
+        try:
+            self.db.commit()
+            self.db.refresh(invoice)
+            logger.info(f"Saved invoice id={invoice.id} ({invoice.file_name})")
+            return invoice
+        except IntegrityError:
+            # Race condition: another concurrent request already inserted this hash.
+            # Rollback and return the existing record as a duplicate.
+            self.db.rollback()
+            existing = self.exists_by_hash(doc_result.file_hash)
+            if existing:
+                logger.info(f"Duplicate detected (race): {doc_result.file_name} → id={existing.id}")
+                return existing
+            raise  # Unexpected IntegrityError on a different column
 
     def save_error(
         self,
@@ -149,15 +138,12 @@ class InvoiceRepository:
         self,
         skip: int = 0,
         limit: int = 50,
-        platform: Optional[str] = None,
         status: Optional[str] = None,
         search: Optional[str] = None,
     ) -> tuple[list[Invoice], int]:
         """Returns (invoices, total_count)."""
         q = self.db.query(Invoice)
 
-        if platform:
-            q = q.filter(Invoice.platform.ilike(f"%{platform}%"))
         if status:
             q = q.filter(Invoice.status == status)
         if search:
@@ -166,28 +152,22 @@ class InvoiceRepository:
                 or_(
                     Invoice.invoice_number.ilike(pattern),
                     Invoice.order_id.ilike(pattern),
-                    Invoice.seller_name.ilike(pattern),
-                    Invoice.buyer_name.ilike(pattern),
-                    Invoice.file_name.ilike(pattern),
                 )
             )
 
         total = q.count()
-        invoices = q.order_by(desc(Invoice.created_at)).offset(skip).limit(limit).all()
+        invoices = q.order_by(desc(Invoice.id)).offset(skip).limit(limit).all()
         return invoices, total
 
     def get_all_for_export(
         self,
-        platform: Optional[str] = None,
         status: Optional[str] = None,
     ) -> list[Invoice]:
         """Fetch all invoices for CSV/Excel export (no pagination)."""
         q = self.db.query(Invoice)
-        if platform:
-            q = q.filter(Invoice.platform.ilike(f"%{platform}%"))
         if status:
             q = q.filter(Invoice.status == status)
-        return q.order_by(desc(Invoice.created_at)).all()
+        return q.order_by(desc(Invoice.id)).all()
 
     # ── Update ────────────────────────────────────────────────────────────────
 
@@ -197,10 +177,9 @@ class InvoiceRepository:
         if not invoice:
             return None
         allowed = {
-            "invoice_number", "invoice_date", "order_id", "platform",
-            "seller_name", "seller_gstin", "buyer_name",
-            "billing_address", "shipping_address", "subtotal",
-            "grand_total", "payment_method", "status",
+            "invoice_number", "invoice_date", "order_id",
+            "seller_gstin",
+            "grand_total", "status", "category",
         }
         for key, val in updates.items():
             if key in allowed:
@@ -230,19 +209,10 @@ class InvoiceRepository:
             .scalar() or 0
         )
 
-        # Spend by platform
-        by_platform_rows = (
-            self.db.query(Invoice.platform, func.sum(Invoice.grand_total))
-            .filter(Invoice.platform.isnot(None))
-            .group_by(Invoice.platform)
-            .all()
-        )
-        by_platform = {row[0]: round(row[1] or 0, 2) for row in by_platform_rows}
-
         # Spend by month
         by_month_rows = (
             self.db.query(
-                func.strftime("%Y-%m", Invoice.created_at).label("month"),
+                func.strftime("%Y-%m", Invoice.invoice_date).label("month"),
                 func.count(Invoice.id),
                 func.sum(Invoice.grand_total),
             )
@@ -255,25 +225,9 @@ class InvoiceRepository:
             for r in by_month_rows
         ]
 
-        # Top sellers
-        top_sellers_rows = (
-            self.db.query(Invoice.seller_name, func.sum(Invoice.grand_total))
-            .filter(Invoice.seller_name.isnot(None))
-            .group_by(Invoice.seller_name)
-            .order_by(desc(func.sum(Invoice.grand_total)))
-            .limit(10)
-            .all()
-        )
-        top_sellers = [
-            {"seller": r[0], "total": round(r[1] or 0, 2)}
-            for r in top_sellers_rows
-        ]
-
         return {
             "total_invoices": total,
             "total_spend": round(total_spend, 2),
-            "by_platform": by_platform,
             "by_month": by_month,
-            "top_sellers": top_sellers,
             "needs_review_count": needs_review,
         }

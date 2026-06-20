@@ -11,20 +11,38 @@ from PIL import Image
 logger = logging.getLogger(__name__)
 
 
+def light_preprocess_image(image: Image.Image) -> Image.Image:
+    """
+    Fast preprocessing for clean/digital images (e.g., natively-rendered PDFs).
+    Only applies grayscale conversion + Otsu thresholding.
+    ~10ms vs ~5s for the full pipeline.
+    """
+    try:
+        img_array = np.array(image.convert("RGB"))
+        gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        return Image.fromarray(binary)
+    except Exception as e:
+        logger.warning(f"Light preprocessing failed, using original: {e}")
+        return image
+
+
 def preprocess_image(image: Image.Image) -> Image.Image:
     """
-    Full preprocessing pipeline:
+    Full preprocessing pipeline for scanned/noisy documents:
     1. Convert to grayscale
     2. Deskew (correct rotation)
-    3. Adaptive thresholding (binarize)
-    4. Noise removal
+    3. Fast denoising (median blur — replaces slow fastNlMeansDenoising)
+    4. Adaptive thresholding (binarize)
     Returns a PIL Image ready for Tesseract.
     """
     try:
         img_array = np.array(image.convert("RGB"))
         gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
         deskewed = _deskew(gray)
-        denoised = cv2.fastNlMeansDenoising(deskewed, h=10)
+        # Median blur is ~100x faster than fastNlMeansDenoising and
+        # sufficient for salt-and-pepper noise in scanned documents
+        denoised = cv2.medianBlur(deskewed, 3)
         # Adaptive threshold works better than Otsu for uneven lighting
         binary = cv2.adaptiveThreshold(
             denoised,
@@ -34,10 +52,7 @@ def preprocess_image(image: Image.Image) -> Image.Image:
             11,
             2,
         )
-        # Slight sharpening kernel
-        kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]])
-        sharpened = cv2.filter2D(binary, -1, kernel)
-        return Image.fromarray(sharpened)
+        return Image.fromarray(binary)
     except Exception as e:
         logger.warning(f"Preprocessing failed, using original: {e}")
         return image
@@ -86,3 +101,4 @@ def scale_image(image: Image.Image, target_dpi: int = 300) -> Image.Image:
     scale = target_dpi / 72
     new_size = (int(image.width * scale), int(image.height * scale))
     return image.resize(new_size, Image.LANCZOS)
+

@@ -1,28 +1,92 @@
 import { useState } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
-import Sidebar from './components/Sidebar'
 import Dashboard from './pages/Dashboard'
 import Upload from './pages/Upload'
 import InvoiceList from './pages/InvoiceList'
 import InvoiceDetail from './pages/InvoiceDetail'
 import Analytics from './pages/Analytics'
+import Modify from './pages/Modify'
+import NaturalQuery from './pages/NaturalQuery'
+import BackgroundPreview from './pages/BackgroundPreview'
+import Login from './pages/Login'
+import UserManagement from './pages/UserManagement'
+import PurchaseOrders from './pages/PurchaseOrders'
+import ItemCodes from './pages/ItemCodes'
+import POMatching from './pages/POMatching'
+import TrackingDashboard from './pages/TrackingDashboard'
+import InventoryDashboard from './pages/InventoryDashboard'
+import PlaceholderPage from './pages/PlaceholderPage'
+import RegisterInventory from './pages/RegisterInventory'
+import SearchInventory from './pages/SearchInventory'
+import { AuthProvider } from './context/AuthContext'
+import { UploadProvider } from './context/UploadContext'
+import ProtectedRoute from './components/ProtectedRoute'
+import AppLayout from './components/AppLayout'
 
 export default function App() {
   return (
-    <BrowserRouter>
-      <div className="flex h-screen overflow-hidden bg-surface-900">
-        <Sidebar />
-        <main className="flex-1 overflow-y-auto">
+    <AuthProvider>
+      <UploadProvider>
+        <BrowserRouter>
           <Routes>
-            <Route path="/" element={<Navigate to="/dashboard" replace />} />
-            <Route path="/dashboard" element={<Dashboard />} />
-            <Route path="/upload" element={<Upload />} />
-            <Route path="/invoices" element={<InvoiceList />} />
-            <Route path="/invoices/:id" element={<InvoiceDetail />} />
-            <Route path="/analytics" element={<Analytics />} />
+            <Route path="/login" element={<Login />} />
+            
+            <Route element={<ProtectedRoute><AppLayout /></ProtectedRoute>}>
+              <Route path="/" element={<Navigate to="/dashboard" replace />} />
+              <Route path="/dashboard" element={<Dashboard />} />
+              
+              {/* Top Header Links */}
+              <Route path="/help" element={<PlaceholderPage title="Help & Support" />} />
+              <Route path="/settings" element={<PlaceholderPage title="Settings" />} />
+              
+              {/* Ask AI Link */}
+              <Route path="/query" element={<NaturalQuery />} />
+              
+              {/* Inventory Routes */}
+              <Route path="/upload" element={<ProtectedRoute requireUpload={true}><Upload /></ProtectedRoute>} />
+              <Route path="/inventory/register/:id?" element={<RegisterInventory />} />
+              <Route path="/inventory/search" element={<SearchInventory />} />
+              <Route path="/inventory/dashboard" element={<InventoryDashboard />} />
+              
+              {/* Track & Trace Routes */}
+              <Route path="/tracking" element={<TrackingDashboard />} />
+              <Route path="/tracking/trace-inv" element={<PlaceholderPage title="Trace Inventory" />} />
+              <Route path="/tracking/workflow" element={<PlaceholderPage title="Track Workflow" />} />
+              <Route path="/tracking/process" element={<PlaceholderPage title="Track Process" />} />
+              <Route path="/tracking/manage" element={<PlaceholderPage title="Manage Tracking" />} />
+              
+              {/* Purchase Routes */}
+              <Route path="/purchase-orders" element={<PlaceholderPage title="Purchase Dashboard" />} />
+              <Route path="/purchase/generate" element={<PurchaseOrders />} />
+              <Route path="/purchase/track" element={<PlaceholderPage title="Track PO" />} />
+              <Route path="/purchase/search" element={<PlaceholderPage title="Search PO" />} />
+              <Route path="/purchase/manage" element={<PlaceholderPage title="Manage Purchase" />} />
+              
+              {/* App Management Routes */}
+              <Route path="/users" element={<ProtectedRoute requiredRole="admin"><UserManagement /></ProtectedRoute>} />
+              <Route path="/app-management/configure" element={<ItemCodes />} />
+              <Route path="/app-management/alerts" element={<PlaceholderPage title="Alerts & Notifications" />} />
+              <Route path="/app-management/dashboard" element={<PlaceholderPage title="App Management Dashboard" />} />
+              <Route path="/app-management/manage" element={<PlaceholderPage title="Manage Application" />} />
+              
+              {/* Billing & Payments Routes */}
+              <Route path="/invoices" element={<InvoiceList />} />
+              <Route path="/invoices/:id" element={<InvoiceDetail />} />
+              <Route path="/billing/summary" element={<PlaceholderPage title="Billing Summary" />} />
+              <Route path="/billing/history" element={<PlaceholderPage title="Billing History" />} />
+              <Route path="/billing/register" element={<PlaceholderPage title="Billing Register" />} />
+              <Route path="/billing/manage" element={<PlaceholderPage title="Manage Billing" />} />
+              
+              {/* Other Existing Routes */}
+              <Route path="/analytics" element={<Analytics />} />
+              <Route path="/preview-bg" element={<BackgroundPreview />} />
+              <Route path="/modify" element={<ProtectedRoute requireUpload={true}><Modify /></ProtectedRoute>} />
+              <Route path="/item-codes" element={<ItemCodes />} />
+              <Route path="/po-matching" element={<POMatching />} />
+            </Route>
           </Routes>
-        </main>
-      </div>
-    </BrowserRouter>
+        </BrowserRouter>
+      </UploadProvider>
+    </AuthProvider>
   )
 }

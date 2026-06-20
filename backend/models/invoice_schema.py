@@ -13,23 +13,8 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 # ─── Sub-models ───────────────────────────────────────────────────────────────
 
-class Address(BaseModel):
-    line1: Optional[str] = None
-    line2: Optional[str] = None
-    city: Optional[str] = None
-    state: Optional[str] = None
-    pincode: Optional[str] = None
-    country: Optional[str] = "India"
-
-    def as_string(self) -> str:
-        parts = [p for p in [self.line1, self.line2, self.city, self.state, self.pincode] if p]
-        return ", ".join(parts)
-
-
 class LineItem(BaseModel):
     name: str
-    description: Optional[str] = None
-    sku: Optional[str] = None
     hsn_code: Optional[str] = None
     quantity: float = 1.0
     unit_price: float = 0.0
@@ -59,7 +44,6 @@ class TaxBreakdown(BaseModel):
     sgst_amount: Optional[float] = None
     igst_rate: Optional[float] = None
     igst_amount: Optional[float] = None
-    cess_amount: Optional[float] = None
     total_tax: Optional[float] = None
 
 
@@ -74,33 +58,21 @@ class InvoiceExtracted(BaseModel):
     invoice_number: Optional[str] = None
     invoice_date: Optional[str] = None  # String first, coerced to date later
     order_id: Optional[str] = None
-    platform: Optional[str] = None  # Amazon, Flipkart, Meesho, etc.
 
     # Parties
-    seller_name: Optional[str] = None
     seller_gstin: Optional[str] = None
-    seller_address: Optional[Address] = None
-
-    buyer_name: Optional[str] = None
-    billing_address: Optional[Address] = None
-    shipping_address: Optional[Address] = None
 
     # Items
     line_items: list[LineItem] = Field(default_factory=list)
 
     # Financials
-    subtotal: Optional[float] = None
     tax_breakdown: Optional[TaxBreakdown] = None
     grand_total: Optional[float] = None
-    currency: str = "INR"
-
-    # Payment
-    payment_method: Optional[str] = None
 
     # Metadata
     confidence_score: float = 0.0  # 0–1, set after validation
 
-    @field_validator("subtotal", "grand_total", mode="before")
+    @field_validator("grand_total", mode="before")
     @classmethod
     def parse_amount(cls, v: Any) -> Optional[float]:
         if v is None:
@@ -113,6 +85,30 @@ class InvoiceExtracted(BaseModel):
         except ValueError:
             return None
 
+    @model_validator(mode="after")
+    def validate_and_fix_grand_total(self) -> InvoiceExtracted:
+        """
+        Auto-corrects hallucinated grand totals (e.g. LLM picking a phone number).
+        If the grand total is missing or wildly disproportionate to the line items,
+        it falls back to a computed sum.
+        """
+        # Calculate expected total (line items + tax)
+        # Note: some invoices include tax in total_price, some don't.
+        # We just need a ballpark to detect massive hallucinations.
+        expected_total = sum(item.total_price for item in self.line_items)
+        if self.tax_breakdown and self.tax_breakdown.total_tax:
+            expected_total += self.tax_breakdown.total_tax
+
+        if expected_total > 0:
+            if self.grand_total is None or self.grand_total == 0.0:
+                self.grand_total = expected_total
+            else:
+                # If extracted total is > 5x the expected sum, it's likely a phone number/ID
+                if self.grand_total > (expected_total * 5):
+                    self.grand_total = expected_total
+        
+        return self
+
     def compute_confidence(self) -> float:
         """
         Heuristic confidence score based on how many key fields are populated.
@@ -120,9 +116,7 @@ class InvoiceExtracted(BaseModel):
         key_fields = [
             self.invoice_number,
             self.invoice_date,
-            self.seller_name,
             self.grand_total,
-            self.buyer_name,
             self.order_id,
         ]
         filled = sum(1 for f in key_fields if f is not None)
@@ -144,26 +138,26 @@ class InvoiceExtracted(BaseModel):
 class InvoiceResponse(BaseModel):
     """Full invoice record returned from DB."""
     id: int
-    file_name: str
     file_hash: str
-    platform: Optional[str]
     invoice_number: Optional[str]
     invoice_date: Optional[str]
     order_id: Optional[str]
-    seller_name: Optional[str]
+    product_description: Optional[str]
+    hsn_code: Optional[str]
+    quantity: Optional[float]
     seller_gstin: Optional[str]
-    buyer_name: Optional[str]
-    billing_address: Optional[str]
-    shipping_address: Optional[str]
-    subtotal: Optional[float]
+    cgst_rate: Optional[float]
+    cgst_amount: Optional[float]
+    sgst_rate: Optional[float]
+    sgst_amount: Optional[float]
+    igst_rate: Optional[float]
+    igst_amount: Optional[float]
+    total_tax: Optional[float]
     grand_total: Optional[float]
-    currency: str
-    payment_method: Optional[str]
     confidence_score: Optional[float]
     source_type: Optional[str]
     ocr_confidence: Optional[float]
     status: str
-    created_at: datetime
     line_items: list[dict] = []
     taxes: list[dict] = []
 
@@ -185,7 +179,5 @@ class JobStatus(BaseModel):
 class StatsResponse(BaseModel):
     total_invoices: int
     total_spend: float
-    by_platform: dict[str, float]
     by_month: list[dict]
-    top_sellers: list[dict]
     needs_review_count: int

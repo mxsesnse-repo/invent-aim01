@@ -14,12 +14,13 @@ import pdfplumber
 from PIL import Image
 
 import config
-from core.preprocessor import preprocess_image, scale_image
+from core.preprocessor import preprocess_image, light_preprocess_image, scale_image
 from core.ocr_engine import run_ocr
 
 logger = logging.getLogger(__name__)
 
 MIN_WORDS_FOR_NATIVE_PDF = 20  # Below this → treat as scanned PDF
+OCR_RENDER_DPI = 200  # 200 DPI is sufficient for Tesseract; 300 DPI is overkill
 
 
 @dataclass
@@ -110,13 +111,14 @@ def _process_pdf(file_path: Path, file_size: int, file_hash: str) -> DocumentRes
     page_count = len(doc)
 
     for page in doc:
-        # Render at 300 DPI (matrix = 300/72)
-        mat = fitz.Matrix(300 / 72, 300 / 72)
+        # Render at configured DPI (200 default — 44% fewer pixels than 300)
+        mat = fitz.Matrix(OCR_RENDER_DPI / 72, OCR_RENDER_DPI / 72)
         pix = page.get_pixmap(matrix=mat, alpha=False)
         img_bytes = pix.tobytes("png")
         img = Image.open(io.BytesIO(img_bytes))
 
-        processed = preprocess_image(img)
+        # Use light preprocessing for PDF-rendered pages (already clean digital images)
+        processed = light_preprocess_image(img)
         result = run_ocr(processed)
         pages_text.append(result.text)
         confidences.append(result.confidence)

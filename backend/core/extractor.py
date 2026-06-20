@@ -7,7 +7,7 @@ import logging
 from typing import Optional
 
 from core.ollama_client import ollama, extract_json_from_response
-from models.invoice_schema import InvoiceExtracted, LineItem, TaxBreakdown, Address
+from models.invoice_schema import InvoiceExtracted, LineItem, TaxBreakdown
 import config
 
 logger = logging.getLogger(__name__)
@@ -23,74 +23,35 @@ RULES:
 - For amounts, use numbers only (no currency symbols or commas).
 - For dates, use YYYY-MM-DD format if possible, otherwise the original text.
 - GSTIN format is 15 characters: e.g. 29AABCT1332L1ZD
-- Detect the platform from seller name or document headers (Amazon, Flipkart, Meesho, etc.)
-- Include ALL line items found in the invoice.
+- Include ONLY ACTUAL PHYSICAL PRODUCTS in line items. Do NOT include marketplace fees, shipping, or service charges.
 """
 
-# ─── Extraction prompt template ────────────────────────────────────────────────
-EXTRACTION_PROMPT = """Extract all fields from the following invoice text and return a JSON object with this exact schema:
+# ─── Extraction prompt template (compressed for faster inference) ───────────────
+EXTRACTION_PROMPT = """Extract all fields from the invoice text below. Return a JSON object with this schema:
 
 {{
-  "invoice_number": "string or null",
-  "invoice_date": "YYYY-MM-DD or original date string or null",
-  "order_id": "string or null",
-  "platform": "Amazon|Flipkart|Meesho|Other or null",
-  "seller_name": "string or null",
-  "seller_gstin": "15-char GSTIN or null",
-  "seller_address": {{
-    "line1": "string or null",
-    "line2": "string or null",
-    "city": "string or null",
-    "state": "string or null",
-    "pincode": "string or null"
-  }},
-  "buyer_name": "string or null",
-  "billing_address": {{
-    "line1": "string or null",
-    "city": "string or null",
-    "state": "string or null",
-    "pincode": "string or null"
-  }},
-  "shipping_address": {{
-    "line1": "string or null",
-    "city": "string or null",
-    "state": "string or null",
-    "pincode": "string or null"
-  }},
-  "line_items": [
-    {{
-      "name": "product name",
-      "sku": "string or null",
-      "hsn_code": "string or null",
-      "quantity": 1,
-      "unit_price": 0.0,
-      "total_price": 0.0,
-      "tax_rate": null,
-      "tax_amount": null
-    }}
-  ],
-  "subtotal": 0.0,
-  "tax_breakdown": {{
-    "cgst_rate": null,
-    "cgst_amount": null,
-    "sgst_rate": null,
-    "sgst_amount": null,
-    "igst_rate": null,
-    "igst_amount": null,
-    "cess_amount": null,
-    "total_tax": null
-  }},
-  "grand_total": 0.0,
-  "currency": "INR",
-  "payment_method": "string or null"
+  "invoice_number": "string|null",
+  "invoice_date": "YYYY-MM-DD|null",
+  "order_id": "string|null",
+  "seller_gstin": "15-char GSTIN|null",
+  "line_items": [{{"name":"full product description","hsn_code":"string|null","quantity":1,"unit_price":0.0,"total_price":0.0,"tax_rate":null,"tax_amount":null}}],
+  "tax_breakdown": {{"cgst_rate":null,"cgst_amount":null,"sgst_rate":null,"sgst_amount":null,"igst_rate":null,"igst_amount":null,"total_tax":null}},
+  "grand_total": 0.0
 }}
+
+Rules: 
+1. EXTREMELY IMPORTANT: Carefully locate the EXACT 'Invoice Number' (or Bill No). Do not miss it. Look near the top of the document.
+2. Line Items: ONLY include physical products. Ignore lines starting with 'Marketplace Fees', 'Shipping', or 'Handling'.
+3. Taxes: Strictly extract ONLY numeric rates (e.g. 18) and numeric amounts (e.g. 150.50). Do not include ₹ symbols.
+4. Indian GST: CGST+SGST or IGST. total_tax = sum of all taxes. 
+5. grand_total = Final amount payable. Must be a realistic amount.
 
 INVOICE TEXT:
 ---
 {raw_text}
 ---
 
-Return ONLY the JSON object:"""
+JSON:"""
 
 
 async def extract_invoice_fields(
@@ -104,7 +65,7 @@ async def extract_invoice_fields(
     model = model or config.OLLAMA_TEXT_MODEL
 
     # Truncate very long text to avoid context window overflow
-    max_chars = 8000
+    max_chars = 6000
     text_for_llm = raw_text[:max_chars]
     if len(raw_text) > max_chars:
         logger.warning(f"Text truncated from {len(raw_text)} to {max_chars} chars for LLM")
@@ -143,15 +104,6 @@ async def extract_invoice_fields(
 
 def _dict_to_invoice(data: dict) -> InvoiceExtracted:
     """Convert raw dict from LLM to validated InvoiceExtracted."""
-    # Nested address parsing
-    for addr_field in ["seller_address", "billing_address", "shipping_address"]:
-        if isinstance(data.get(addr_field), dict):
-            data[addr_field] = Address(**{
-                k: v for k, v in data[addr_field].items() if v
-            })
-        elif data.get(addr_field) is None:
-            data[addr_field] = None
-
     # Line items
     raw_items = data.pop("line_items", []) or []
     line_items = []

@@ -16,7 +16,9 @@ logger = logging.getLogger(__name__)
 VISION_SYSTEM_PROMPT = """You are an expert invoice data extraction assistant.
 Look at the invoice image and extract all visible fields.
 Respond with ONLY a valid JSON object — no explanations, no markdown.
-If a field is not visible, use null."""
+If a field is not visible, use null.
+Include ONLY ACTUAL PHYSICAL PRODUCTS in line items. Do NOT include marketplace fees, shipping, or service charges.
+"""
 
 VISION_PROMPT = """Look at this invoice image and extract the following fields as JSON:
 
@@ -24,18 +26,17 @@ VISION_PROMPT = """Look at this invoice image and extract the following fields a
   "invoice_number": "string or null",
   "invoice_date": "YYYY-MM-DD or null",
   "order_id": "string or null",
-  "platform": "Amazon|Flipkart|Meesho|Other or null",
-  "seller_name": "string or null",
   "seller_gstin": "string or null",
-  "buyer_name": "string or null",
-  "billing_address": {"line1": null, "city": null, "state": null, "pincode": null},
-  "shipping_address": {"line1": null, "city": null, "state": null, "pincode": null},
-  "line_items": [{"name": "product", "quantity": 1, "unit_price": 0.0, "total_price": 0.0}],
-  "subtotal": null,
-  "grand_total": null,
-  "currency": "INR",
-  "payment_method": null
+  "line_items": [{"name": "full product description", "quantity": 1, "unit_price": 0.0, "total_price": 0.0, "tax_rate": null, "tax_amount": null}],
+  "tax_breakdown": {"cgst_rate":null,"cgst_amount":null,"sgst_rate":null,"sgst_amount":null,"igst_rate":null,"igst_amount":null,"total_tax":null},
+  "grand_total": null
 }
+
+Rules:
+1. Carefully extract the 'Invoice Number' (or Bill No). Do not miss it.
+2. Line Items: ONLY include physical products. Ignore lines starting with 'Marketplace Fees', 'Shipping', or 'Handling'.
+3. Taxes: Strictly extract ONLY numeric rates (e.g. 18) and numeric amounts (e.g. 150.50). Do not include currency symbols.
+4. grand_total = Final amount payable. Must be a realistic number.
 
 Return ONLY the JSON:"""
 

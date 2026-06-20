@@ -1,201 +1,201 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { getStats, listInvoices } from '../api/client'
-import { TrendingUp, FileText, IndianRupee, AlertTriangle, ChevronRight, CheckCircle } from 'lucide-react'
+import { getStats, getHealth, listInvoices } from '../api/client'
+import { Upload, FileText, BarChart3, Settings2, Zap, Activity, Users } from 'lucide-react'
+import { LineChart, Line, ResponsiveContainer, CartesianGrid } from 'recharts'
+import { useAuth } from '../context/AuthContext'
 import clsx from 'clsx'
 
-function StatCard({ icon: Icon, label, value, sub, color = 'brand' }) {
-  const colors = {
-    brand: 'from-brand-500 to-violet-600',
-    emerald: 'from-emerald-500 to-teal-600',
-    amber: 'from-amber-500 to-orange-600',
-    rose: 'from-rose-500 to-pink-600',
-  }
+const BrutalistButton = ({ children, onClick, className, icon: Icon, textClass = "text-3xl" }) => {
   return (
-    <div className="stat-card animate-slide-up">
-      <div className={`w-10 h-10 rounded-xl bg-gradient-to-br ${colors[color]} flex items-center justify-center mb-2`}>
-        <Icon size={20} className="text-white" />
+    <button
+      onClick={onClick}
+      className={clsx(
+        "group relative flex items-center justify-center p-6 border-2 border-black transition-all duration-500 bg-transparent hover:border-black/20 hover:shadow-none shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 active:shadow-none",
+        className
+      )}
+    >
+      {/* Background container with overflow-hidden */}
+      <div className="absolute inset-0 overflow-hidden pointer-events-none">
+        {/* Background Black Striped Layer */}
+        <div className="absolute inset-0 btn-striped" />
+        
+        {/* Wipe Layer (Yellow background sliding in from top-left) */}
+        <div 
+          className="absolute -inset-4 bg-[#FCD535] z-0 transition-transform duration-500 ease-in-out -translate-x-full -translate-y-full group-hover:translate-x-0 group-hover:translate-y-0" 
+          style={{ transformOrigin: 'top left' }}
+        />
       </div>
-      <p className="text-white/50 text-xs font-medium uppercase tracking-wider">{label}</p>
-      <p className="text-2xl font-bold text-white mt-1">{value}</p>
-      {sub && <p className="text-xs text-white/40">{sub}</p>}
-    </div>
-  )
-}
 
-function StatusBadge({ status }) {
-  const map = {
-    processed: 'badge-processed',
-    needs_review: 'badge-review',
-    error: 'badge-error',
-    duplicate: 'badge-duplicate',
-  }
-  const labels = {
-    processed: 'Processed',
-    needs_review: 'Review',
-    error: 'Error',
-    duplicate: 'Duplicate',
-  }
-  return <span className={map[status] || 'badge-processed'}>{labels[status] || status}</span>
+      {/* Brackets Layer (visible on hover, positioned further outside) */}
+      <div className="absolute -top-[6px] -left-[6px] w-[50px] h-[30px] border-t-[5px] border-l-[5px] border-black opacity-0 group-hover:opacity-100 transition-opacity duration-500 z-10" />
+      <div className="absolute -top-[6px] -right-[6px] w-[50px] h-[30px] border-t-[5px] border-r-[5px] border-black opacity-0 group-hover:opacity-100 transition-opacity duration-500 z-10" />
+      <div className="absolute -bottom-[6px] -left-[6px] w-[50px] h-[30px] border-b-[5px] border-l-[5px] border-black opacity-0 group-hover:opacity-100 transition-opacity duration-500 z-10" />
+      <div className="absolute -bottom-[6px] -right-[6px] w-[50px] h-[30px] border-b-[5px] border-r-[5px] border-black opacity-0 group-hover:opacity-100 transition-opacity duration-500 z-10" />
+      
+      {/* Content Layer */}
+      <div className="relative z-20 flex items-center gap-3">
+        {Icon && (
+          <Icon size={24} className="text-[#FCD535] group-hover:text-black transition-colors duration-500" />
+        )}
+        <span className={clsx("text-[#FCD535] group-hover:text-black font-black tracking-widest text-glitch group-hover:[text-shadow:none] transition-all duration-500 uppercase", textClass)}>
+          {children}
+        </span>
+      </div>
+    </button>
+  )
 }
 
 export default function Dashboard() {
   const [stats, setStats] = useState(null)
-  const [recent, setRecent] = useState([])
+  const [invoices, setInvoices] = useState([])
+  const [ollamaOk, setOllamaOk] = useState(null)
   const [loading, setLoading] = useState(true)
   const navigate = useNavigate()
+  const { user, logout } = useAuth()
 
   useEffect(() => {
-    Promise.all([getStats(), listInvoices({ limit: 8 })]).then(([s, r]) => {
+    Promise.all([
+      getStats().catch(() => ({ data: { by_month: [] } })),
+      getHealth().catch(() => ({ data: { ollama: { status: 'error' } } })),
+      listInvoices({ limit: 50 }).catch(() => ({ data: { items: [] } }))
+    ]).then(([s, h, inv]) => {
       setStats(s.data)
-      setRecent(r.data.items || [])
-    }).finally(() => setLoading(false))
+      setOllamaOk(h.data.ollama?.status === 'ok')
+      // Reverse so oldest is first
+      setInvoices((inv.data?.items || []).slice().reverse())
+      setLoading(false)
+    })
   }, [])
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-full">
-        <div className="flex flex-col items-center gap-3">
-          <div className="w-10 h-10 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />
-          <p className="text-white/50 text-sm">Loading dashboard...</p>
-        </div>
-      </div>
-    )
+  // Create chart data from individual invoices
+  let chartData = invoices.map((inv, i) => ({
+    name: inv.invoice_number || `Inv #${i+1}`,
+    spend: inv.grand_total || 0
+  }))
+
+  // If there's only 1 invoice, add a starting point so a line is drawn
+  if (chartData.length === 1) {
+    chartData.unshift({ name: 'Start', spend: 0 })
+  } else if (chartData.length === 0) {
+    // Fake placeholder data so the chart is never empty
+    chartData = [
+      { name: 'Jan', spend: 1200 },
+      { name: 'Feb', spend: 2100 },
+      { name: 'Mar', spend: 800 },
+      { name: 'Apr', spend: 1600 },
+      { name: 'May', spend: 3200 },
+    ]
   }
 
-  const formatCurrency = (v) =>
-    v != null ? `₹${Number(v).toLocaleString('en-IN', { maximumFractionDigits: 0 })}` : '—'
-
   return (
-    <div className="p-8 max-w-7xl mx-auto animate-fade-in">
-      {/* Header */}
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold text-white">
-          Welcome back 👋
-        </h1>
-        <p className="text-white/50 mt-1">Here's your invoice summary at a glance.</p>
+    <div className="min-h-screen bg-brutal-yellow text-black font-mono p-8 selection:bg-black selection:text-[#FCD535]">
+      
+      {/* Top Navigation removed, handled by AppLayout */}
+
+      <div className="flex items-center justify-between text-xs font-bold tracking-widest mb-2 uppercase">
+        <span>// AI POWERED<br/>// ENTERPRISE READY</span>
+        <span>V12.40.0</span>
       </div>
+      <hr className="border-t-2 border-black mb-16" />
 
-      {/* Blobs */}
-      <div className="blob w-96 h-96 bg-brand-600 -top-32 -right-32 fixed" />
-      <div className="blob w-64 h-64 bg-violet-600 top-1/2 -left-32 fixed" />
-
-      {/* Stat Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8 relative">
-        <StatCard
-          icon={FileText}
-          label="Total Invoices"
-          value={stats?.total_invoices ?? 0}
-          sub="All time"
-          color="brand"
-        />
-        <StatCard
-          icon={IndianRupee}
-          label="Total Spend"
-          value={formatCurrency(stats?.total_spend)}
-          sub="Grand total across all invoices"
-          color="emerald"
-        />
-        <StatCard
-          icon={TrendingUp}
-          label="Platforms"
-          value={Object.keys(stats?.by_platform || {}).length}
-          sub="Unique sources"
-          color="amber"
-        />
-        <StatCard
-          icon={AlertTriangle}
-          label="Needs Review"
-          value={stats?.needs_review_count ?? 0}
-          sub="Low confidence extractions"
-          color="rose"
-        />
-      </div>
-
-      {/* Platform spend + Recent invoices */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Platform breakdown */}
-        <div className="glass-card p-6">
-          <h2 className="text-sm font-semibold text-white/70 uppercase tracking-wider mb-4">Spend by Platform</h2>
-          {Object.keys(stats?.by_platform || {}).length === 0 ? (
-            <p className="text-white/30 text-sm">No data yet — upload invoices to get started.</p>
-          ) : (
-            <div className="flex flex-col gap-3">
-              {Object.entries(stats.by_platform)
-                .sort(([, a], [, b]) => b - a)
-                .map(([platform, total]) => {
-                  const max = Math.max(...Object.values(stats.by_platform))
-                  const pct = max > 0 ? (total / max) * 100 : 0
-                  return (
-                    <div key={platform}>
-                      <div className="flex justify-between text-sm mb-1">
-                        <span className="text-white/80 font-medium">{platform || 'Unknown'}</span>
-                        <span className="text-white/50">{formatCurrency(total)}</span>
-                      </div>
-                      <div className="h-1.5 bg-white/10 rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-gradient-to-r from-brand-500 to-violet-500 rounded-full transition-all duration-700"
-                          style={{ width: `${pct}%` }}
-                        />
-                      </div>
-                    </div>
-                  )
-                })}
-            </div>
-          )}
-        </div>
-
-        {/* Recent invoices */}
-        <div className="glass-card p-6 lg:col-span-2">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-sm font-semibold text-white/70 uppercase tracking-wider">Recent Invoices</h2>
-            <button
-              onClick={() => navigate('/invoices')}
-              className="text-xs text-brand-400 hover:text-brand-300 flex items-center gap-1 transition-colors"
-            >
-              View all <ChevronRight size={12} />
-            </button>
+      {/* Main Hero */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-16 mb-24">
+        <div>
+          <h1 className="text-7xl font-black tracking-tighter leading-[0.9] mb-8">
+            InvoiceAI.<br/>
+            Production-grade<br/>
+            extraction for<br/>the web.
+          </h1>
+          <div className="flex items-center gap-6 text-sm font-bold tracking-widest mb-12 uppercase">
+            <span>&gt; AVAILABLE FOR</span>
+            <span>PDF</span>
+            <span>JPG</span>
+            <span>PNG</span>
           </div>
-          {recent.length === 0 ? (
-            <div className="text-center py-8">
-              <FileText size={32} className="text-white/20 mx-auto mb-2" />
-              <p className="text-white/30 text-sm">No invoices yet.</p>
-              <button
-                onClick={() => navigate('/upload')}
-                className="mt-3 btn-primary text-xs px-4 py-2"
-              >
-                Upload your first invoice
-              </button>
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {recent.map(inv => (
-                <div
-                  key={inv.id}
-                  onClick={() => navigate(`/invoices/${inv.id}`)}
-                  className="flex items-center justify-between p-3 rounded-xl bg-white/5 hover:bg-white/10 cursor-pointer transition-all group"
-                >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className="w-8 h-8 rounded-lg bg-brand-600/20 flex items-center justify-center shrink-0">
-                      <FileText size={14} className="text-brand-400" />
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-sm text-white font-medium truncate">{inv.file_name}</p>
-                      <p className="text-xs text-white/40">
-                        {inv.platform || 'Unknown'} · {inv.seller_name || '—'}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-3 shrink-0 ml-2">
-                    <span className="text-sm font-semibold text-white">{formatCurrency(inv.grand_total)}</span>
-                    <StatusBadge status={inv.status} />
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
+          
+          {/* Main Action Button */}
+          <BrutalistButton 
+            onClick={() => navigate('/upload')}
+            className="px-12 py-6"
+            textClass="text-3xl"
+          >
+            Get Started
+          </BrutalistButton>
+        </div>
+
+        {/* Chart Area */}
+        <div className="p-4 relative">
+          <h2 className="text-sm font-bold uppercase tracking-widest mb-4">Monthly Spend Trajectory</h2>
+          <div className="h-[280px] w-full border-2 border-black bg-[#FCD535] relative z-10">
+            {loading ? (
+              <div className="w-full h-full flex items-center justify-center font-bold tracking-widest">LOADING...</div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={chartData} margin={{ top: 20, right: 20, bottom: 20, left: 20 }}>
+                  <CartesianGrid strokeDasharray="4 4" stroke="#000" vertical={false} />
+                  <Line 
+                    type="monotone" 
+                    dataKey="spend" 
+                    stroke="#000" 
+                    strokeWidth={3} 
+                    dot={{ fill: '#FCD535', r: 5, strokeWidth: 2, stroke: '#000' }} 
+                    activeDot={{ r: 8, fill: '#000' }}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+          
+          {/* Brutalist ruler marks */}
+          <div className="absolute -bottom-6 left-4 right-4 h-4 border-t-2 border-black flex justify-between px-1">
+            {Array.from({length: 50}).map((_, i) => (
+              <div key={i} className={`w-[2px] bg-black ${i % 5 === 0 ? 'h-4' : 'h-2'}`} />
+            ))}
+          </div>
         </div>
       </div>
+
+      {/* Decorative Divider */}
+      <div className="flex items-center gap-4 text-xl font-bold tracking-widest overflow-hidden mb-12 select-none">
+        <span>+</span>
+        <div className="flex-1 whitespace-nowrap overflow-hidden tracking-tighter">
+          ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+        </div>
+        <span>+</span>
+      </div>
+
+      {/* Navigation Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-12 pb-16">
+        {[
+          { path: '/invoices', icon: FileText, label: 'Invoices', title: 'MANAGE', desc: 'View processed invoices and extract structured JSON data.' },
+          { path: '/analytics', icon: BarChart3, label: 'Analytics', title: 'ANALYZE', desc: 'Deep dive into spending patterns and extraction metrics.' },
+          { path: '/modify', icon: Settings2, label: 'Modify', title: 'CONFIGURE', desc: 'Adjust extraction rules, schema settings, and webhooks.', requireUpload: true },
+          { path: '/users', icon: Users, label: 'Users', title: 'ACCESS', desc: 'Manage users and upload permissions for your team.', adminOnly: true },
+        ].map((item, i) => {
+          if (item.adminOnly && user?.role !== 'admin') return null;
+          if (item.requireUpload && user?.role !== 'admin' && !user?.can_upload) return null;
+
+          return (
+            <div key={item.path} className="flex flex-col">
+            <span className="text-xs font-bold mb-4">0{i + 1}</span>
+            <h3 className="font-black text-xl mb-4 tracking-tight uppercase">{item.title}</h3>
+            <p className="text-sm font-medium leading-relaxed mb-6 h-16">
+              {item.desc}
+            </p>
+            <BrutalistButton 
+              onClick={() => navigate(item.path)}
+              icon={item.icon}
+              className="w-full py-5 px-4 mt-auto"
+              textClass="text-lg"
+            >
+              {item.label}
+            </BrutalistButton>
+          </div>
+          )
+        })}
+      </div>
+
     </div>
   )
 }

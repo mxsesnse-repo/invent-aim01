@@ -24,10 +24,22 @@ DATABASE_URL: str = _custom_db_url if _custom_db_url else f"sqlite:///{DATA_DIR 
 
 # ─── Ollama ───────────────────────────────────────────────────────────────────
 OLLAMA_HOST: str = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-OLLAMA_TEXT_MODEL: str = os.getenv("OLLAMA_TEXT_MODEL", "llama3.1")
-OLLAMA_VISION_MODEL: str = os.getenv("OLLAMA_VISION_MODEL", "llava:7b")
+OLLAMA_TEXT_MODEL: str = os.getenv("OLLAMA_TEXT_MODEL", "qwen2.5:3b")
+OLLAMA_VISION_MODEL: str = os.getenv("OLLAMA_VISION_MODEL", "moondream:latest")
 OLLAMA_TIMEOUT: int = int(os.getenv("OLLAMA_TIMEOUT", "180"))
 
+# ─── Directories ──────────────────────────────────────────────────────────────
+UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "uploads"))
+UPLOAD_DIR.mkdir(exist_ok=True, parents=True)
+
+# ─── Authentication (JWT) ─────────────────────────────────────────────────────
+# In production, set this to a strong random string in your .env file
+# e.g., openssl rand -hex 32
+SECRET_KEY = os.getenv("SECRET_KEY", "supersecretkey_change_in_production")
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440"))  # 24 hours
+
+# ─── Ollama Configuration ──────────────────────────────────────────────────────
 # ─── Tesseract OCR ────────────────────────────────────────────────────────────
 TESSERACT_CMD: str = os.getenv(
     "TESSERACT_CMD",

@@ -1,14 +1,14 @@
-# InvoiceAI — Local Invoice Scanner
+# Inventory Management System
 
-> Scan Amazon, Flipkart, and any e-commerce invoices locally using OCR + Ollama LLM. No cloud. No data leaves your machine.
+> Complete inventory, purchase order (PO), and user tracking system built locally. Manage invoices, PO matching, natural language queries, and item tracking locally.
 
 ## Features
 - 📄 **PDF & Image support** — PDFs (native text + scanned/OCR), JPG, PNG, TIFF, WebP
-- 🤖 **Ollama-powered extraction** — Uses local LLMs for structured data extraction
+- 🤖 **Ollama-powered extraction** — Uses local LLMs for structured data extraction and natural language queries
 - 🔍 **Smart OCR** — Tesseract with OpenCV preprocessing (deskew, denoise, binarize)
-- 🗄️ **SQLite database** — Stores all extracted data with full deduplication
-- 📦 **Batch processing** — Upload hundreds of invoices at once
-- 🌐 **Web dashboard** — React + Tailwind UI with charts, search, inline editing
+- 🗄️ **SQLite database** — Stores all extracted data, POs, and tracking events
+- 📦 **Inventory & Tracking** — Keep track of items, PO matching, and stock movements
+- 🌐 **Web dashboard** — React + Tailwind UI with charts, search, and user management
 - 📊 **Export** — CSV and Excel export with one click
 - 🔒 **100% local** — Nothing sent to AWS/Azure/Google Cloud
 

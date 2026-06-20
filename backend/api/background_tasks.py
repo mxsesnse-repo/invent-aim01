@@ -20,7 +20,9 @@ logger = logging.getLogger(__name__)
 
 # In-memory job store (suitable for single-process; use Redis for multi-process)
 _jobs: dict[str, dict[str, Any]] = {}
-_semaphore: asyncio.Semaphore = asyncio.Semaphore(config.MAX_CONCURRENT_JOBS)
+# Serialize LLM inference: on CPU-only hardware, concurrent Ollama calls compete
+# for CPU/RAM and make each request slower due to memory contention.
+_semaphore: asyncio.Semaphore = asyncio.Semaphore(1)
 
 
 def create_job(file_paths: list[str]) -> str:
@@ -54,8 +56,34 @@ async def process_batch(job_id: str, file_paths: list[str]) -> None:
     job = _jobs[job_id]
     job["status"] = "processing"
 
-    tasks = [_process_single_file(job_id, fp) for fp in file_paths]
-    await asyncio.gather(*tasks, return_exceptions=True)
+    # ── Check model availability ONCE per batch (not per file) ────────────
+    from core.ollama_client import ollama
+    try:
+        model_ok = await ollama.is_model_available(config.OLLAMA_TEXT_MODEL)
+    except Exception:
+        job["status"] = "failed"
+        job["results"].append({
+            "file_name": "*",
+            "status": "error",
+            "error": f"Cannot connect to Ollama at {config.OLLAMA_HOST}. Make sure Ollama is running: `ollama serve`",
+        })
+        return
+    if not model_ok:
+        job["status"] = "failed"
+        job["results"].append({
+            "file_name": "*",
+            "status": "error",
+            "error": f"Ollama model '{config.OLLAMA_TEXT_MODEL}' is not available. Please pull it first: `ollama pull {config.OLLAMA_TEXT_MODEL}`",
+        })
+        return
+
+    # Process files sequentially — on CPU-only hardware, concurrent Ollama
+    # calls don't parallelize; they compete for CPU/RAM and cause model swapping.
+    for fp in file_paths:
+        try:
+            await _process_single_file(job_id, fp)
+        except Exception:
+            pass  # Errors already tracked inside _process_single_file
 
     failed = job["failed"]
     processed = job["processed"]
@@ -102,24 +130,8 @@ async def _process_single_file(job_id: str, file_path_str: str) -> None:
                 db.close()
                 return
 
-            # ── Step 2: Check Ollama model availability ─────────────────────
-            from core.ollama_client import ollama
-
-            try:
-                model_ok = await ollama.is_model_available(config.OLLAMA_TEXT_MODEL)
-            except Exception:
-                raise RuntimeError(
-                    f"Cannot connect to Ollama at {config.OLLAMA_HOST}. "
-                    f"Make sure Ollama is running: `ollama serve`"
-                )
-            if not model_ok:
-                raise RuntimeError(
-                    f"Ollama model '{config.OLLAMA_TEXT_MODEL}' is not available. "
-                    f"Please pull it first: `ollama pull {config.OLLAMA_TEXT_MODEL}` "
-                    f"(this may take several minutes for the initial download)"
-                )
-
-            # ── Step 3: Load document (OCR if needed) ────────────────────────
+            # ── Step 2: Load document (OCR if needed) ────────────────────────
+            # Model availability is checked once in process_batch(), not here
             logger.info(f"Loading: {file_path.name}")
             doc_result = await asyncio.to_thread(load_document, file_path)
 
@@ -153,8 +165,16 @@ async def _process_single_file(job_id: str, file_path_str: str) -> None:
                 except Exception as ve:
                     logger.warning(f"Vision fallback failed: {ve} — using text extraction")
 
-            # ── Step 4: Save to DB ───────────────────────────────────────────
+            # ── Step 5: Save to DB ───────────────────────────────────────────
             invoice = repo.save_invoice(doc_result, extracted, job_id)
+
+            # ── Step 6: Save JSON to disk ────────────────────────────────────
+            json_path = file_path.with_suffix(".json")
+            try:
+                with open(json_path, "w", encoding="utf-8") as jf:
+                    jf.write(extracted.model_dump_json(indent=2))
+            except Exception as e:
+                logger.warning(f"Failed to save JSON for {file_path.name}: {e}")
 
             duration = int(time.time() * 1000) - start_ms
             logger.info(

@@ -25,6 +25,20 @@ class OllamaClient:
     ):
         self.host = host.rstrip("/")
         self.timeout = timeout
+        # Persistent client — reuses TCP connections across requests (HTTP keep-alive)
+        self._client: httpx.AsyncClient | None = None
+
+    def _get_client(self) -> httpx.AsyncClient:
+        """Lazily create the persistent HTTP client."""
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(timeout=self.timeout)
+        return self._client
+
+    async def close(self) -> None:
+        """Close the persistent HTTP client. Call during app shutdown."""
+        if self._client is not None and not self._client.is_closed:
+            await self._client.aclose()
+            self._client = None
 
     async def generate(
         self,
@@ -38,33 +52,35 @@ class OllamaClient:
             "model": model,
             "prompt": prompt,
             "stream": False,
+            "keep_alive": "10m",  # Keep model in RAM between requests (avoid reload)
             "options": {
                 "temperature": temperature,
-                "num_predict": 2048,
+                "num_predict": 1024,   # Invoice JSON fits in ~800 tokens; cap to avoid waste
+                "num_ctx": 4096,       # Invoices need ~2-3K tokens; default 32K wastes memory/time
             },
         }
         if system:
             payload["system"] = system
 
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            try:
-                resp = await client.post(
-                    f"{self.host}/api/generate",
-                    json=payload,
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                return data.get("response", "").strip()
-            except httpx.TimeoutException:
-                raise RuntimeError(
-                    f"Ollama timed out after {self.timeout}s. "
-                    "Try a smaller model or increase OLLAMA_TIMEOUT."
-                )
-            except httpx.ConnectError:
-                raise RuntimeError(
-                    f"Cannot connect to Ollama at {self.host}. "
-                    "Make sure Ollama is running: `ollama serve`"
-                )
+        client = self._get_client()
+        try:
+            resp = await client.post(
+                f"{self.host}/api/generate",
+                json=payload,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return data.get("response", "").strip()
+        except httpx.TimeoutException:
+            raise RuntimeError(
+                f"Ollama timed out after {self.timeout}s. "
+                "Try a smaller model or increase OLLAMA_TIMEOUT."
+            )
+        except httpx.ConnectError:
+            raise RuntimeError(
+                f"Cannot connect to Ollama at {self.host}. "
+                "Make sure Ollama is running: `ollama serve`"
+            )
 
     async def generate_with_image(
         self,
@@ -82,36 +98,38 @@ class OllamaClient:
             "prompt": prompt,
             "images": [img_b64],
             "stream": False,
+            "keep_alive": "10m",
             "options": {
                 "temperature": 0.1,
-                "num_predict": 2048,
+                "num_predict": 1024,
+                "num_ctx": 4096,
             },
         }
         if system:
             payload["system"] = system
 
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            try:
-                resp = await client.post(
-                    f"{self.host}/api/generate",
-                    json=payload,
-                )
-                resp.raise_for_status()
-                return resp.json().get("response", "").strip()
-            except httpx.TimeoutException:
-                raise RuntimeError(f"Vision model timed out after {self.timeout}s.")
-            except httpx.ConnectError:
-                raise RuntimeError(f"Cannot connect to Ollama at {self.host}.")
+        client = self._get_client()
+        try:
+            resp = await client.post(
+                f"{self.host}/api/generate",
+                json=payload,
+            )
+            resp.raise_for_status()
+            return resp.json().get("response", "").strip()
+        except httpx.TimeoutException:
+            raise RuntimeError(f"Vision model timed out after {self.timeout}s.")
+        except httpx.ConnectError:
+            raise RuntimeError(f"Cannot connect to Ollama at {self.host}.")
 
     async def list_models(self) -> list[dict]:
         """List all locally available Ollama models."""
-        async with httpx.AsyncClient(timeout=10) as client:
-            try:
-                resp = await client.get(f"{self.host}/api/tags")
-                resp.raise_for_status()
-                return resp.json().get("models", [])
-            except Exception:
-                return []
+        client = self._get_client()
+        try:
+            resp = await client.get(f"{self.host}/api/tags")
+            resp.raise_for_status()
+            return resp.json().get("models", [])
+        except Exception:
+            return []
 
     async def is_model_available(self, model_name: str) -> bool:
         """Check if a specific model is pulled and available."""

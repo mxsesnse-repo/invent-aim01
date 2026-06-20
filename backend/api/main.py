@@ -6,12 +6,13 @@ import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from db.database import init_db
-from api.routes import upload, invoices, stats
+from db.database import init_db, seed_default_categories
+from api.routes import upload, invoices, stats, json_files, query, auth, po, products, categories, tracking
+from api.dependencies import get_current_active_user
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -27,8 +28,12 @@ async def lifespan(app: FastAPI):
     """Startup / shutdown lifecycle."""
     logger.info("Starting Invoice Scanner API...")
     init_db()
+    seed_default_categories()
     logger.info("Database initialized.")
     yield
+    # Cleanup persistent HTTP client on shutdown
+    from core.ollama_client import ollama
+    await ollama.close()
     logger.info("Shutting down.")
 
 
@@ -49,9 +54,16 @@ app.add_middleware(
 )
 
 # ─── Routes ───────────────────────────────────────────────────────────────────
-app.include_router(upload.router)
-app.include_router(invoices.router)
-app.include_router(stats.router)
+app.include_router(auth.router, prefix="/api")
+app.include_router(upload.router) # Dependencies added per-route inside upload.py
+app.include_router(invoices.router, dependencies=[Depends(get_current_active_user)])
+app.include_router(stats.router) # Stats router handles its own dependencies if needed
+app.include_router(json_files.router, dependencies=[Depends(get_current_active_user)])
+app.include_router(query.router, dependencies=[Depends(get_current_active_user)])
+app.include_router(po.router, dependencies=[Depends(get_current_active_user)])
+app.include_router(products.router, dependencies=[Depends(get_current_active_user)])
+app.include_router(categories.router, dependencies=[Depends(get_current_active_user)])
+app.include_router(tracking.router, dependencies=[Depends(get_current_active_user)])
 
 
 @app.get("/api")

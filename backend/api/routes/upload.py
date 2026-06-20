@@ -7,16 +7,17 @@ import uuid
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, File, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, HTTPException, UploadFile, Depends
 from fastapi.responses import JSONResponse
 
 import config
 from api.background_tasks import create_job, get_job, list_jobs, process_batch
+from api.dependencies import check_upload_permission, get_current_active_user
 
 router = APIRouter(prefix="/api/upload", tags=["upload"])
 
 
-@router.post("")
+@router.post("", dependencies=[Depends(check_upload_permission)])
 async def upload_invoices(
     background_tasks: BackgroundTasks,
     files: Annotated[list[UploadFile], File(description="Invoice files (PDF/JPG/PNG)")],
@@ -92,7 +93,7 @@ def create_job_with_id(job_id: str, file_paths: list[str]) -> None:
     }
 
 
-@router.get("/job/{job_id}")
+@router.get("/job/{job_id}", dependencies=[Depends(get_current_active_user)])
 async def get_job_status(job_id: str):
     """Poll processing status for a batch job."""
     job = get_job(job_id)
@@ -101,7 +102,7 @@ async def get_job_status(job_id: str):
     return job
 
 
-@router.get("/jobs")
+@router.get("/jobs", dependencies=[Depends(get_current_active_user)])
 async def list_all_jobs():
     """List all recent batch jobs."""
     return list_jobs()
